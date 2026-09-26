@@ -1,47 +1,23 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { PortalRoute } from './components/layout/PortalRoute'
-import { LoginPage } from './pages/LoginPage'
-import { PatientDashboard } from './pages/PatientDashboard'
-import { PatientCareTeam } from './pages/PatientCareTeam'
-import { PatientAppointments } from './pages/PatientAppointments'
-import { PatientTreatments } from './pages/PatientTreatments'
-import { PatientTimeline } from './pages/PatientTimeline'
-import { PatientAiAssessment } from './pages/PatientAiAssessment'
-import { DoctorDashboard } from './pages/DoctorDashboard'
-import { DoctorPatientOverview } from './pages/DoctorPatientOverview'
-import { DoctorPatients } from './pages/DoctorPatients'
-import { PortalPlaceholder } from './pages/PortalPlaceholder'
-import { SignupPage } from './pages/SignupPage'
-import { AccountPage } from './pages/AccountPage'
+import { LandingPage, SentinelPage, SettingsPage } from './sentinel/SentinelPages'
+import { SentinelLoginPage, SentinelProtected, SentinelRole, SentinelSignupPage, useSentinelAuth } from './sentinel/SentinelAuth'
+import { useSearchParams } from 'react-router-dom'
 
 export function App() {
   return <Routes>
-    <Route path="/" element={<LoginPage />} />
-    <Route path="/signup/patient" element={<SignupPage role="patient" />} />
-    <Route path="/signup/doctor" element={<SignupPage role="doctor" />} />
-
-    <Route path="/patient" element={<PortalRoute role="patient" />}>
-      <Route path="dashboard" element={<PatientDashboard />} />
-      <Route path="timeline" element={<PatientTimeline />} />
-      <Route path="care-team" element={<PatientCareTeam />} />
-      <Route path="appointments" element={<PatientAppointments />} />
-      <Route path="treatments" element={<PatientTreatments />} />
-      <Route path="ai-assessment" element={<PatientAiAssessment />} />
-      <Route path="profile" element={<AccountPage mode="profile" />} />
-      <Route path="settings" element={<AccountPage mode="settings" />} />
-      <Route path="privacy-security" element={<AccountPage mode="privacy" />} />
-    </Route>
-
-    <Route path="/doctor" element={<PortalRoute role="doctor" />}>
-      <Route path="dashboard" element={<DoctorDashboard />} />
-      <Route path="patients" element={<DoctorPatients />} />
-      <Route path="patients/:connectionId" element={<DoctorPatientOverview />} />
-      <Route path="schedule" element={<PortalPlaceholder title="Schedule" />} />
-      <Route path="profile" element={<AccountPage mode="profile" />} />
-      <Route path="settings" element={<AccountPage mode="settings" />} />
-      <Route path="privacy-security" element={<AccountPage mode="privacy" />} />
-    </Route>
-
+    <Route path="/" element={<LandingPage />} />
+    <Route path="/login" element={<SentinelLoginPage />} />
+    <Route path="/signup" element={<SentinelSignupPage />} />
+    {(['personnel', 'welfare', 'commander'] as SentinelRole[]).map((role) => <Route key={role} path={`/${role}/*`} element={<SentinelProtected role={role}><SentinelPage role={role} /></SentinelProtected>} />)}
+    <Route path="/settings" element={<ProtectedSettings />} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>
+}
+
+function ProtectedSettings() {
+  const [params] = useSearchParams()
+  const { user } = useSentinelAuth()
+  const queryRole = params.get('role')
+  const role: SentinelRole = queryRole === 'welfare' || queryRole === 'commander' ? queryRole : 'personnel'
+  return <SentinelProtected role={user?.role ?? role}><SettingsPage /></SentinelProtected>
 }

@@ -1,6 +1,8 @@
 import { ArrowRight, Bot, CalendarDays, ClipboardList, MessageCircle, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthContext'
+import { fetchHealthSnapshot, type HealthSnapshot } from '../features/patient-dashboard/dashboardService'
 
 const quickActions = [
   { label: 'View health timeline', detail: 'Review your record', to: '/patient/timeline', icon: ClipboardList },
@@ -10,11 +12,11 @@ const quickActions = [
 ]
 
 const emptySnapshot = [
-  { label: 'Active treatments', detail: 'No active treatments yet' },
-  { label: 'Upcoming appointments', detail: 'No appointments scheduled' },
-  { label: 'Health records', detail: 'No records added yet' },
-  { label: 'Care team members', detail: 'No doctors connected' },
-]
+  { key: 'activeTreatments', label: 'Active treatments', detail: 'No active treatments yet' },
+  { key: 'upcomingAppointments', label: 'Upcoming appointments', detail: 'No appointments scheduled' },
+  { key: 'healthRecords', label: 'Health records', detail: 'No records added yet' },
+  { key: 'careTeamMembers', label: 'Care team members', detail: 'No doctors connected' },
+] satisfies { key: keyof HealthSnapshot; label: string; detail: string }[]
 
 function getTimeBasedGreeting() {
   const hour = new Date().getHours()
@@ -24,13 +26,19 @@ function getTimeBasedGreeting() {
 }
 
 export function PatientDashboard() {
-  const { profile } = useAuth()
+  const { profile, user } = useAuth()
   const firstName = profile?.full_name.trim().split(/\s+/)[0] || 'there'
   const greeting = getTimeBasedGreeting()
+  const [snapshot, setSnapshot] = useState<HealthSnapshot | null>(null)
+  const [snapshotLoading, setSnapshotLoading] = useState(true)
+  const [snapshotError, setSnapshotError] = useState(false)
+
+  useEffect(() => { let active = true; if (!user) { setSnapshot(null); setSnapshotLoading(false); return () => { active = false } }; setSnapshotLoading(true); setSnapshotError(false); void fetchHealthSnapshot(user.id).then((data) => { if (active) setSnapshot(data) }).catch(() => { if (active) { setSnapshot(null); setSnapshotError(true) } }).finally(() => { if (active) setSnapshotLoading(false) }); return () => { active = false } }, [user?.id])
+  const hasCareData = snapshot ? Object.values(snapshot).some((count) => count > 0) : false
 
   return <div className="patient-dashboard">
     <header className="dashboard-header"><div><p className="dashboard-date">Your health overview</p><h2>{greeting}, {firstName}</h2><p>Your care information will appear here as it becomes available.</p></div></header>
-    <section className="dashboard-section" aria-labelledby="snapshot-heading"><div className="section-heading"><div><p className="section-kicker">At a glance</p><h3 id="snapshot-heading">Health snapshot</h3></div><span className="updated-status">No care data yet</span></div><div className="snapshot-grid">{emptySnapshot.map((item) => <article className="snapshot-item" key={item.label}><strong>0</strong><span>{item.label}</span><small>{item.detail}</small></article>)}</div></section>
+    <section className="dashboard-section" aria-labelledby="snapshot-heading"><div className="section-heading"><div><p className="section-kicker">At a glance</p><h3 id="snapshot-heading">Health snapshot</h3></div><span className="updated-status">{snapshotLoading ? 'Loading care data…' : snapshotError ? 'Care data unavailable' : hasCareData ? 'Care data updated' : 'No care data yet'}</span></div><div className="snapshot-grid">{emptySnapshot.map((item) => <article className="snapshot-item" key={item.label}><strong aria-busy={snapshotLoading}>{snapshotLoading || snapshotError ? '—' : snapshot?.[item.key] ?? 0}</strong><span>{item.label}</span><small>{snapshotError ? 'Care data could not load. Please refresh the page.' : item.detail}</small></article>)}</div></section>
     <div className="dashboard-columns">
       <section className="dashboard-section appointment-section" aria-labelledby="appointment-heading"><div className="section-heading"><div><p className="section-kicker">Next in your care</p><h3 id="appointment-heading">Upcoming appointment</h3></div></div><div className="dashboard-empty-state"><CalendarDays size={22} /><div><h4>No upcoming appointments</h4><p>When you schedule care, your next appointment will appear here.</p><Link className="text-action" to="/patient/appointments">Manage appointments <ArrowRight size={16} /></Link></div></div></section>
       <section className="dashboard-section treatments-section" aria-labelledby="treatments-heading"><div className="section-heading"><div><p className="section-kicker">Ongoing care</p><h3 id="treatments-heading">Active treatments</h3></div><Link className="section-link" to="/patient/treatments">View all</Link></div><div className="dashboard-empty-state"><ClipboardList size={22} /><div><h4>No active treatments</h4><p>Treatment plans shared by your care team will be listed here.</p><Link className="text-action" to="/patient/treatments">View treatments <ArrowRight size={16} /></Link></div></div></section>
