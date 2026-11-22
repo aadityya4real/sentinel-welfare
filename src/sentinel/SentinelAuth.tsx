@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { AuthError, Session, User as SupabaseUser } from '@supabase/supabase-js'
+import type { Session, User as SupabaseUser } from '@supabase/supabase-js'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail, Shield, UserRound } from 'lucide-react'
 import { isSupabaseConfigured, setSupabaseSessionPersistence, supabase } from '../lib/supabase'
@@ -26,13 +26,26 @@ function getDisplayName(authUser: SupabaseUser, profileName?: string | null) {
   return profileName?.trim() || (typeof authUser.user_metadata?.display_name === 'string' ? authUser.user_metadata.display_name.trim() : '') || authUser.email?.split('@')[0] || 'SENTINEL user'
 }
 
-function safeAuthError(error: AuthError) {
-  const message = error.message.toLowerCase()
+function safeAuthError(error: unknown) {
+  const rawMessage = error instanceof Error
+    ? error.message
+    : error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : ''
+  const cleanMessage = rawMessage
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/https?:\/\/\S+/gi, '[URL]')
+    .replace(/\bBearer\s+[\w.-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(api[_ -]?key|token|secret)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .trim()
+    .slice(0, 240)
+  const message = cleanMessage.toLowerCase()
   if (message.includes('already registered') || message.includes('already been registered')) return 'An account with this email already exists.'
   if (message.includes('invalid login credentials') || message.includes('email not confirmed')) return 'We could not sign you in with those details. Check your email and password, and verify your email if requested.'
   if (message.includes('password')) return 'Use a password that meets the account requirements.'
   if (message.includes('rate limit')) return 'Too many attempts. Please wait a little and try again.'
-  return authFailure
+  if (message.includes('database error saving new user')) return 'Supabase could not save the new account (Database error saving new user). Check Supabase Auth logs and signup triggers for a profile constraint or trigger failure.'
+  return cleanMessage || authFailure
 }
 
 async function readSentinelUser(authUser: SupabaseUser): Promise<SentinelUser> {
@@ -105,7 +118,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
       if (!data.session) return { requiresEmailConfirmation: true }
       if (!await syncSession(data.session)) return { error: 'Your account was created, but its profile could not be loaded. Please contact support.' }
       return {}
-    } catch { return { error: authFailure } }
+    } catch (error) { return { error: safeAuthError(error) } }
   }, [configurationError, syncSession])
 
   const signIn = useCallback(async (email: string, password: string, remember: boolean): Promise<AuthResult> => {
