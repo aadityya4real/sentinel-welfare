@@ -31,11 +31,11 @@ export default {
       })
     }
 
-    if (secret.length < 32) return json(503, { error: 'Presentation access is not enabled on this deployment.' })
+    if (secret.length < 32) return json(503, { error: 'Demo Access is not enabled on this deployment.' })
     let body: unknown
     try { body = await request.json() } catch { return json(400, { error: 'Send a valid JSON request.' }) }
     const accessKey = body && typeof body === 'object' && 'accessKey' in body ? body.accessKey : undefined
-    if (!isValidPresentationKey(accessKey, secret)) return json(401, { error: 'The presentation access key is incorrect.' })
+    if (!isValidPresentationKey(accessKey, secret)) return json(401, { error: 'That demo access key did not match. Check it and try again.' })
 
     const { token } = createPresentationToken(secret)
     return json(200, { authenticated: true }, {

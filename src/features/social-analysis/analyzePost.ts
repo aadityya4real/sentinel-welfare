@@ -29,6 +29,7 @@ export async function analyzePost(text: string, platform: string, presentationAc
 
   const payload: unknown = await response.json().catch(() => null)
   if (!response.ok) {
+    if (presentationAccess && response.status === 401) throw new Error('Your Demo Access session has expired or is no longer valid. Return to Demo Access and enter the key again.')
     const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'object' && payload.error && 'message' in payload.error && typeof payload.error.message === 'string'
       ? payload.error.message
       : 'Analysis failed. Please try again.'
