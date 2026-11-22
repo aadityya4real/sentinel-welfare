@@ -10,13 +10,11 @@ type AuthApi = {
   user: SentinelUser | null
   loading: boolean
   isDemoAccess: boolean
-  demoSessionExpired: boolean
-  demoAccessMessage: string | null
   configurationError: string | null
   profileError: string | null
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>
   signIn: (email: string, password: string, remember: boolean) => Promise<AuthResult>
-  signInForDemo: (username: string, password: string) => Promise<AuthResult>
+  enterDemo: () => void
   signOut: () => Promise<AuthResult>
   logout: () => Promise<AuthResult>
   requestPasswordReset: (email: string) => Promise<AuthResult>
@@ -26,7 +24,7 @@ const DASHBOARD = '/dashboard'
 const AuthContext = createContext<AuthApi | null>(null)
 const authFailure = 'We could not complete that request. Check your details and try again.'
 const demoUser: SentinelUser = { id: 'demo-access', name: 'Demo Workspace', email: 'demo@sentinel.local' }
-const DEMO_SESSION_MARKER = 'sentinel-demo-session-active'
+const DEMO_MODE_KEY = 'sentinel-demo-mode-active'
 
 function getDisplayName(authUser: SupabaseUser, profileName?: string | null) {
   return profileName?.trim() || (typeof authUser.user_metadata?.display_name === 'string' ? authUser.user_metadata.display_name.trim() : '') || authUser.email?.split('@')[0] || 'SENTINEL user'
@@ -68,13 +66,13 @@ async function readSentinelUser(authUser: SupabaseUser): Promise<SentinelUser> {
 }
 
 export function SentinelAuthProvider({ children }: { children: ReactNode }) {
+  const location = useLocation()
   const [user, setUser] = useState<SentinelUser | null>(null)
-  const [isDemoAccess, setIsDemoAccess] = useState(false)
-  const [demoSessionExpired, setDemoSessionExpired] = useState(false)
-  const [demoAccessMessage, setDemoAccessMessage] = useState<string | null>(null)
+  const [isDemoAccess, setIsDemoAccess] = useState(() => window.localStorage.getItem(DEMO_MODE_KEY) === 'true')
   const [loading, setLoading] = useState(true)
   const [profileError, setProfileError] = useState<string | null>(null)
   const syncGeneration = useRef(0)
+  const skipNextAuthRestore = useRef(false)
   const [configurationError] = useState(() => isSupabaseConfigured ? null : 'SENTINEL authentication is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or VITE_SUPABASE_PUBLISHABLE_KEY) to continue.')
 
   const syncSession = useCallback(async (session: Session | null): Promise<boolean> => {
@@ -105,39 +103,21 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true
     let unsubscribe = () => {}
-    const restoreDemoAccess = async () => {
-      try {
-        const response = await fetch('/api/demo-session', { credentials: 'same-origin', cache: 'no-store' })
-        if (!response.ok) {
-          setDemoAccessMessage(response.status >= 500
-            ? 'Demo Access is temporarily unavailable. Please try again in a moment.'
-            : 'Demo Access could not be checked. Please try again.')
-          return false
-        }
-        if (!response.headers.get('content-type')?.includes('application/json')) {
-          setDemoAccessMessage('Demo Access returned an unexpected response. Start the API with Vercel development mode when testing locally.')
-          return false
-        }
-        const result = await response.json() as { enabled?: boolean; authenticated?: boolean }
-        if (active && result.authenticated) {
-          setIsDemoAccess(true)
-          setDemoSessionExpired(false)
-          setDemoAccessMessage(null)
-          setUser(demoUser)
-          setLoading(false)
-          return true
-        }
-        if (active && result.enabled === false) setDemoAccessMessage('Demo Access is not enabled for this deployment yet.')
-      } catch {
-        if (active) setDemoAccessMessage('Demo Access could not be reached. Check your connection and try again.')
-        return false
-      }
-      if (active && window.sessionStorage.getItem(DEMO_SESSION_MARKER)) {
-        window.sessionStorage.removeItem(DEMO_SESSION_MARKER)
-        setDemoSessionExpired(true)
-        setDemoAccessMessage('Your demo session expired. Select Enter Demo to continue.')
-      }
-      return false
+    if (skipNextAuthRestore.current) {
+      skipNextAuthRestore.current = false
+      setUser(null)
+      setLoading(false)
+      return () => { active = false }
+    }
+    if (isDemoAccess) {
+      setUser(demoUser)
+      setLoading(false)
+      return () => { active = false }
+    }
+    if (location.pathname === '/demo-access') {
+      setUser(null)
+      setLoading(false)
+      return () => { active = false }
     }
     const restore = async () => {
       if (supabase) {
@@ -145,13 +125,11 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
           const { data, error } = await supabase.auth.getSession()
           if (!active) return
           if (!error && data.session) {
-            setIsDemoAccess(false)
             await syncSession(data.session)
             return
           }
-        } catch { /* Fall back to checking the isolated demo cookie. */ }
+        } catch { /* A missing session is handled below. */ }
       }
-      if (await restoreDemoAccess()) return
       if (active) await syncSession(null)
     }
     if (supabase) {
@@ -159,10 +137,9 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
         queueMicrotask(() => {
           if (!active) return
           if (session) {
-            setIsDemoAccess(false)
             void syncSession(session)
           } else {
-            void restoreDemoAccess().then((restored) => { if (active && !restored) void syncSession(null) })
+            void syncSession(null)
           }
         })
       })
@@ -170,7 +147,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     }
     void restore()
     return () => { active = false; unsubscribe() }
-  }, [syncSession])
+  }, [syncSession, isDemoAccess, location.pathname])
 
   const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
     if (!supabase) return { error: configurationError ?? authFailure }
@@ -196,48 +173,21 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     } catch { return { error: authFailure } }
   }, [configurationError, syncSession])
 
-  const signInForDemo = useCallback(async (username: string, password: string): Promise<AuthResult> => {
-    setDemoAccessMessage(null)
-    try {
-      const response = await fetch('/api/demo-session', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-      if (!response.headers.get('content-type')?.includes('application/json')) {
-        return { error: response.status >= 500
-          ? 'Demo Access encountered a server error. Please try again in a moment.'
-          : 'Demo Access returned an unexpected response. Use Vercel development mode when testing locally.' }
-      }
-      const result = await response.json().catch(() => ({})) as { authenticated?: boolean; error?: string }
-      if (!response.ok || !result.authenticated) {
-        if (response.status === 401) return { error: 'The demo username or password is incorrect. Check your details and try again.' }
-        if (response.status === 503) return { error: 'Demo Access is unavailable right now. Please try again later.' }
-        if (response.status >= 500) return { error: 'Demo Access encountered a server error. Please try again in a moment.' }
-        return { error: result.error ?? 'Demo Access could not be started. Please try again.' }
-      }
-      // This marker contains no credential; it only allows the app to recognize an expired cookie in this tab.
-      window.sessionStorage.setItem(DEMO_SESSION_MARKER, 'active')
-      setDemoSessionExpired(false)
-      setDemoAccessMessage(null)
-      setIsDemoAccess(true)
-      setUser(demoUser)
-      setProfileError(null)
-      return {}
-    } catch { return { error: 'Demo Access could not be reached. Check your connection and try again.' } }
+  const enterDemo = useCallback(() => {
+    window.localStorage.setItem(DEMO_MODE_KEY, 'true')
+    setIsDemoAccess(true)
+    setUser(demoUser)
+    setProfileError(null)
+    setLoading(false)
   }, [])
 
   const signOut = useCallback(async (): Promise<AuthResult> => {
     if (isDemoAccess) {
-      try {
-        const response = await fetch('/api/demo-session', { method: 'DELETE', credentials: 'same-origin' })
-        if (!response.ok) return { error: 'Could not end Demo Access. Please close this browser tab.' }
-      } catch { return { error: 'Could not reach the Demo Access service. Please close this browser tab.' } }
-      window.sessionStorage.removeItem(DEMO_SESSION_MARKER)
+      window.localStorage.removeItem(DEMO_MODE_KEY)
+      skipNextAuthRestore.current = true
       setIsDemoAccess(false)
-      setDemoAccessMessage(null)
       setUser(null)
+      setLoading(true)
       return {}
     }
     if (!supabase) return { error: configurationError ?? authFailure }
@@ -258,7 +208,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     } catch { return { error: authFailure } }
   }, [configurationError])
 
-  const value = useMemo<AuthApi>(() => ({ user, loading, isDemoAccess, demoSessionExpired, demoAccessMessage, configurationError, profileError, signUp, signIn, signInForDemo, signOut, logout: signOut, requestPasswordReset }), [user, loading, isDemoAccess, demoSessionExpired, demoAccessMessage, configurationError, profileError, signUp, signIn, signInForDemo, signOut, requestPasswordReset])
+  const value = useMemo<AuthApi>(() => ({ user, loading, isDemoAccess, configurationError, profileError, signUp, signIn, enterDemo, signOut, logout: signOut, requestPasswordReset }), [user, loading, isDemoAccess, configurationError, profileError, signUp, signIn, enterDemo, signOut, requestPasswordReset])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
@@ -271,10 +221,10 @@ export function useSentinelAuth() {
 function LoadingState() { return <main className="sentinel-auth" role="status" aria-live="polite"><div className="auth-form-wrap"><h2>Restoring your session</h2><p className="auth-intro">Please wait while SENTINEL checks your account.</p></div></main> }
 
 export function SentinelProtected({ children }: { children: ReactNode }) {
-  const { user, loading, demoSessionExpired } = useSentinelAuth()
+  const { user, loading } = useSentinelAuth()
   const location = useLocation()
   if (loading) return <LoadingState />
-  if (!user) return <Navigate to={demoSessionExpired ? '/demo-access' : '/login'} state={demoSessionExpired ? { message: 'Your demo session expired. Select Enter Demo to continue.' } : { from: location.pathname }} replace />
+  if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />
   return <>{children}</>
 }
 
@@ -321,28 +271,13 @@ export function SentinelLoginPage() {
 }
 
 export function SentinelDemoAccessPage() {
-  const { user, loading, demoSessionExpired, demoAccessMessage, signInForDemo } = useSentinelAuth()
+  const { enterDemo } = useSentinelAuth()
   const navigate = useNavigate()
-  const location = useLocation()
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const state = location.state as { message?: string } | null
-  const notice = state?.message ?? (demoSessionExpired ? 'Your demo session expired. Select Enter Demo to continue.' : demoAccessMessage ?? '')
-  if (loading) return <LoadingState />
-  if (user) return <Navigate to={DASHBOARD} replace />
-  const enterDemo = async (event: FormEvent) => {
-    event.preventDefault()
-    setError('')
-    setBusy(true)
-    const result = await signInForDemo(username, password)
-    setBusy(false)
-    if (result.error) { setError(result.error); return }
-    setPassword('')
+  const enter = () => {
+    enterDemo()
     navigate(DASHBOARD, { replace: true })
   }
-  return <AuthFrame heading="Welcome to SENTINEL Demo" intro="Explore the platform in a demonstration environment created for teachers, judges, and evaluators."><div className="demo-access-kicker"><span className="demo-access-icon"><ShieldCheck size={17}/></span><span><b>Evaluator workspace</b><small>Secure demo sign-in</small></span></div>{notice && !error && <p className="demo-session-notice" role="status">{notice}</p>}<form className="sentinel-auth-form demo-access-form" onSubmit={(event)=>void enterDemo(event)} noValidate><label htmlFor="demo-username">Demo username<span className="auth-input"><UserRound size={17}/><input id="demo-username" type="text" value={username} onChange={(event)=>setUsername(event.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required/></span></label><label htmlFor="demo-password">Password<span className="auth-input"><LockKeyhole size={17}/><input id="demo-password" type="password" value={password} onChange={(event)=>setPassword(event.target.value)} autoComplete="current-password" required/></span></label>{error && <p role="alert" className="auth-error">{error}</p>}<button className="auth-submit demo-enter-button" type="submit" disabled={busy || !username.trim() || !password}>{busy ? 'Verifying access…' : 'Enter Demo'} <ArrowRight size={16}/></button></form><div className="demo-privacy-note"><ShieldCheck size={16}/><p>Demo Access is separate from personal accounts. Your demo activity stays in this browser and does not change Supabase user records.</p></div><p className="auth-switch">Already have an account? <Link to="/login">Sign in to SENTINEL</Link></p></AuthFrame>
+  return <AuthFrame heading="Welcome to SENTINEL Demo" intro="Explore the platform in a demonstration environment created for teachers, judges, and evaluators."><div className="demo-access-kicker"><span className="demo-access-icon"><ShieldCheck size={17}/></span><span><b>Evaluator workspace</b><small>Synthetic demonstration data</small></span></div><button className="auth-submit demo-enter-button" type="button" onClick={enter}>Enter Demo <ArrowRight size={16}/></button><div className="demo-privacy-note"><ShieldCheck size={16}/><p>Demo activity is stored only in this browser and is separate from personal accounts. Sample insights are illustrative and are not diagnoses.</p></div><p className="auth-switch">Already have an account? <Link to="/login">Sign in to SENTINEL</Link></p></AuthFrame>
 }
 
 export function SentinelSignupPage() {

@@ -1,5 +1,3 @@
-import { hasValidPresentationSession } from '../server/demoAccess'
-
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
 const MAX_TEXT_LENGTH = 5000
 const MAX_BODY_BYTES = 30_000
@@ -82,16 +80,14 @@ async function verifyAccessToken(token: string, supabaseUrl: string, publicKey: 
   } catch { return 'unavailable' }
 }
 
-async function handle(request: Request): Promise<Response> {
+export async function handleAnalyzeRequest(request: Request, requireSupabaseAuth = true): Promise<Response> {
   if (request.method !== 'POST') return json(405, 'method_not_allowed', 'Use POST to analyze a post.')
-  const authorization = request.headers.get('authorization') ?? ''
-  const tokenMatch = authorization.match(/^Bearer\s+([^\s]+)$/i)
-  const hasPresentationAccess = await hasValidPresentationSession(request)
-  if (!tokenMatch && !hasPresentationAccess) return json(401, 'unauthorized', 'Sign in before analyzing a post.')
-
-  const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim()
-  const publicKey = process.env.VITE_SUPABASE_ANON_KEY?.trim() || process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
-  if (tokenMatch) {
+  if (requireSupabaseAuth) {
+    const authorization = request.headers.get('authorization') ?? ''
+    const tokenMatch = authorization.match(/^Bearer\s+([^\s]+)$/i)
+    if (!tokenMatch) return json(401, 'unauthorized', 'Sign in before analyzing a post.')
+    const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim()
+    const publicKey = process.env.VITE_SUPABASE_ANON_KEY?.trim() || process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
     if (!supabaseUrl || !publicKey) return json(503, 'auth_service_not_configured', 'The authentication service is not configured on the server.')
     const authStatus = await verifyAccessToken(tokenMatch[1], supabaseUrl, publicKey)
     if (authStatus === 'invalid') return json(401, 'unauthorized', 'Your session is invalid or expired. Sign in again.')
@@ -157,7 +153,7 @@ async function handle(request: Request): Promise<Response> {
 export default {
   async fetch(request: Request) {
     try {
-      return await handle(request)
+      return await handleAnalyzeRequest(request)
     } catch (error) {
       console.error('[analyze] handler failure', error instanceof Error ? error.name : 'UnknownError')
       return json(500, 'internal_error', 'The analysis service encountered a server error. Please try again.')

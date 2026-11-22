@@ -33,6 +33,24 @@ const authStorage = {
   },
 }
 
+let client: SupabaseClient | null = null
+
+function getClient() {
+  if (!client && isSupabaseConfigured) {
+    client = createClient(supabaseUrl, supabaseAnonKey, { auth: { storage: authStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
+  }
+  return client
+}
+
+// Keep the existing API for the app's account features, but don't initialize
+// Supabase Auth until one of those features actually uses the client.
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, { auth: { storage: authStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
+  ? new Proxy({} as SupabaseClient, {
+    get(_target, property) {
+      const activeClient = getClient()
+      if (!activeClient) return undefined
+      const value = Reflect.get(activeClient, property, activeClient) as unknown
+      return typeof value === 'function' ? value.bind(activeClient) : value
+    },
+  })
   : null

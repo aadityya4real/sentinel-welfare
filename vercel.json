@@ -2,6 +2,9 @@
   "functions": {
     "api/analyze.ts": {
       "maxDuration": 30
+    },
+    "api/demo-analyze.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

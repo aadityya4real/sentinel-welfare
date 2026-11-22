@@ -27,7 +27,8 @@ const KEY_PREFIX = 'sentinel-analysis-history-v1:'
 const UPDATED_EVENT = 'sentinel-analysis-history-updated'
 const MAX_HISTORY = 50
 
-function historyKey(userId: string) { return `${KEY_PREFIX}${userId}` }
+const DEMO_HISTORY_KEY = 'sentinel_demo_history'
+function historyKey(userId: string) { return userId === 'demo-access' ? DEMO_HISTORY_KEY : `${KEY_PREFIX}${userId}` }
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value)) }
 function isSavedAnalysis(value: unknown): value is SavedAnalysis {
   if (!isRecord(value)) return false
@@ -53,9 +54,17 @@ export function getAnalysisHistory(userId: string): SavedAnalysis[] {
 
 export function saveAnalysis(userId: string, item: SavedAnalysis): boolean {
   try {
-    const next = [item, ...getAnalysisHistory(userId)].filter((existing) => existing.id !== item.id).slice(0, MAX_HISTORY)
+    const next = [item, ...getAnalysisHistory(userId).filter((existing) => existing.id !== item.id)].slice(0, MAX_HISTORY)
     window.localStorage.setItem(historyKey(userId), JSON.stringify(next))
     window.dispatchEvent(new CustomEvent(UPDATED_EVENT, { detail: { userId } }))
+    return true
+  } catch { return false }
+}
+
+export function resetDemoAnalysisHistory(): boolean {
+  try {
+    window.localStorage.removeItem(DEMO_HISTORY_KEY)
+    window.dispatchEvent(new CustomEvent(UPDATED_EVENT, { detail: { userId: 'demo-access' } }))
     return true
   } catch { return false }
 }
