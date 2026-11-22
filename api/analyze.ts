@@ -86,7 +86,7 @@ async function handle(request: Request): Promise<Response> {
   if (request.method !== 'POST') return json(405, 'method_not_allowed', 'Use POST to analyze a post.')
   const authorization = request.headers.get('authorization') ?? ''
   const tokenMatch = authorization.match(/^Bearer\s+([^\s]+)$/i)
-  const hasPresentationAccess = hasValidPresentationSession(request)
+  const hasPresentationAccess = await hasValidPresentationSession(request)
   if (!tokenMatch && !hasPresentationAccess) return json(401, 'unauthorized', 'Sign in before analyzing a post.')
 
   const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim()
@@ -154,4 +154,13 @@ async function handle(request: Request): Promise<Response> {
   })
 }
 
-export default { fetch: handle }
+export default {
+  async fetch(request: Request) {
+    try {
+      return await handle(request)
+    } catch (error) {
+      console.error('[analyze] handler failure', error instanceof Error ? error.name : 'UnknownError')
+      return json(500, 'internal_error', 'The analysis service encountered a server error. Please try again.')
+    }
+  },
+}

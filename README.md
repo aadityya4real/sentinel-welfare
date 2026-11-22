@@ -11,6 +11,9 @@ Set these values in an ignored local `.env.local` file for `vercel dev`, and in 
 | `VITE_SUPABASE_URL` | Frontend and API token verification | Yes |
 | `VITE_SUPABASE_ANON_KEY` | Frontend and API token verification; use only the browser-safe anon key | One of these two keys |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Alternative browser-safe project key | One of these two keys |
+| `SENTINEL_DEMO_USERNAME` | Server-side Demo Access sign-in | Yes for Demo Access |
+| `SENTINEL_DEMO_PASSWORD` | Server-side Demo Access sign-in; never sent to Vite/browser code | Yes for Demo Access |
+| `SENTINEL_DEMO_SIGNING_SECRET` | Server-side signing of short-lived Demo Access cookies; at least 32 characters | Yes for Demo Access |
 | `GEMINI_API_KEY` | Server-side `/api/analyze` function only | Yes for analysis |
 | `GEMINI_MODEL` | Server-side model override; defaults to `gemini-3.5-flash-lite` | No |
 
@@ -24,13 +27,13 @@ The regular Vite command serves the frontend but does not execute Vercel functio
 npm run dev
 ```
 
-To test `/api/analyze` locally, use Vercel's development server after signing in to the Vercel CLI and linking the project if prompted:
+To test `/api/demo-session` and `/api/analyze` locally, use Vercel's development server after signing in to the Vercel CLI and linking the project if prompted. The plain Vite server does not provide API routes:
 
 ```sh
 npx vercel dev
 ```
 
-Provide the environment values above to that server. Set `GEMINI_API_KEY` only in the ignored local environment file or Vercel's server environment. Never commit real environment files.
+Provide the environment values above in the ignored `.env.local` file or Vercel's server environment. Set the three Demo Access values to enable credential-based demo sign-in. Never commit real environment files.
 
 ## Supabase database migration
 
