@@ -9,10 +9,12 @@ type AuthResult = { error?: string; requiresEmailConfirmation?: boolean }
 type AuthApi = {
   user: SentinelUser | null
   loading: boolean
+  isPresentationAccess: boolean
   configurationError: string | null
   profileError: string | null
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>
   signIn: (email: string, password: string, remember: boolean) => Promise<AuthResult>
+  signInForPresentation: (accessKey: string) => Promise<AuthResult>
   signOut: () => Promise<AuthResult>
   logout: () => Promise<AuthResult>
   requestPasswordReset: (email: string) => Promise<AuthResult>
@@ -21,6 +23,7 @@ type AuthApi = {
 const DASHBOARD = '/dashboard'
 const AuthContext = createContext<AuthApi | null>(null)
 const authFailure = 'We could not complete that request. Check your details and try again.'
+const presentationUser: SentinelUser = { id: 'presentation-access', name: 'Presenter', email: 'presentation@sentinel.local' }
 
 function getDisplayName(authUser: SupabaseUser, profileName?: string | null) {
   return profileName?.trim() || (typeof authUser.user_metadata?.display_name === 'string' ? authUser.user_metadata.display_name.trim() : '') || authUser.email?.split('@')[0] || 'SENTINEL user'
@@ -63,6 +66,7 @@ async function readSentinelUser(authUser: SupabaseUser): Promise<SentinelUser> {
 
 export function SentinelAuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SentinelUser | null>(null)
+  const [isPresentationAccess, setIsPresentationAccess] = useState(false)
   const [loading, setLoading] = useState(true)
   const [profileError, setProfileError] = useState<string | null>(null)
   const syncGeneration = useRef(0)
@@ -94,19 +98,52 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (!supabase) { setLoading(false); return }
     let active = true
-    const client = supabase
-    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
-      // Defer database access until after the auth callback returns.
-      queueMicrotask(() => { if (active) void syncSession(session) })
-    })
-    void client.auth.getSession().then(({ data, error }) => {
-      if (!active) return
-      if (error) { setUser(null); setLoading(false); return }
-      void syncSession(data.session)
-    }).catch(() => { if (active) { setUser(null); setLoading(false) } })
-    return () => { active = false; listener.subscription.unsubscribe() }
+    let unsubscribe = () => {}
+    const restorePresentation = async () => {
+      try {
+        const response = await fetch('/api/demo-session', { credentials: 'same-origin', cache: 'no-store' })
+        const result = await response.json() as { authenticated?: boolean }
+        if (active && result.authenticated) {
+          setIsPresentationAccess(true)
+          setUser(presentationUser)
+          setLoading(false)
+          return true
+        }
+      } catch { /* Normal Supabase sign-in remains available when demo access is disabled. */ }
+      return false
+    }
+    const restore = async () => {
+      if (supabase) {
+        try {
+          const { data, error } = await supabase.auth.getSession()
+          if (!active) return
+          if (!error && data.session) {
+            setIsPresentationAccess(false)
+            await syncSession(data.session)
+            return
+          }
+        } catch { /* Fall back to checking the isolated presentation cookie. */ }
+      }
+      if (await restorePresentation()) return
+      if (active) await syncSession(null)
+    }
+    if (supabase) {
+      const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+        queueMicrotask(() => {
+          if (!active) return
+          if (session) {
+            setIsPresentationAccess(false)
+            void syncSession(session)
+          } else {
+            void restorePresentation().then((restored) => { if (active && !restored) void syncSession(null) })
+          }
+        })
+      })
+      unsubscribe = () => listener.subscription.unsubscribe()
+    }
+    void restore()
+    return () => { active = false; unsubscribe() }
   }, [syncSession])
 
   const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
@@ -133,7 +170,33 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     } catch { return { error: authFailure } }
   }, [configurationError, syncSession])
 
+  const signInForPresentation = useCallback(async (accessKey: string): Promise<AuthResult> => {
+    try {
+      const response = await fetch('/api/demo-session', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessKey }),
+      })
+      const result = await response.json() as { authenticated?: boolean; error?: string }
+      if (!response.ok || !result.authenticated) return { error: result.error ?? 'Presentation access could not be started.' }
+      setIsPresentationAccess(true)
+      setUser(presentationUser)
+      setProfileError(null)
+      return {}
+    } catch { return { error: 'The presentation access service could not be reached.' } }
+  }, [])
+
   const signOut = useCallback(async (): Promise<AuthResult> => {
+    if (isPresentationAccess) {
+      try {
+        const response = await fetch('/api/demo-session', { method: 'DELETE', credentials: 'same-origin' })
+        if (!response.ok) return { error: 'Could not end presentation access. Please close this browser tab.' }
+      } catch { return { error: 'Could not reach the presentation access service. Please close this browser tab.' } }
+      setIsPresentationAccess(false)
+      setUser(null)
+      return {}
+    }
     if (!supabase) return { error: configurationError ?? authFailure }
     try {
       const { error } = await supabase.auth.signOut()
@@ -142,7 +205,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
       setUser(null)
       return {}
     } catch { return { error: authFailure } }
-  }, [configurationError])
+  }, [configurationError, isPresentationAccess])
 
   const requestPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
     if (!supabase) return { error: configurationError ?? authFailure }
@@ -152,7 +215,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     } catch { return { error: authFailure } }
   }, [configurationError])
 
-  const value = useMemo<AuthApi>(() => ({ user, loading, configurationError, profileError, signUp, signIn, signOut, logout: signOut, requestPasswordReset }), [user, loading, configurationError, profileError, signUp, signIn, signOut, requestPasswordReset])
+  const value = useMemo<AuthApi>(() => ({ user, loading, isPresentationAccess, configurationError, profileError, signUp, signIn, signInForPresentation, signOut, logout: signOut, requestPasswordReset }), [user, loading, isPresentationAccess, configurationError, profileError, signUp, signIn, signInForPresentation, signOut, requestPasswordReset])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
@@ -211,7 +274,28 @@ export function SentinelLoginPage() {
     if (result.error) setError(result.error)
     else setNotice('If an account exists for that email, a password recovery link has been sent.')
   }
-  return <AuthFrame heading="Welcome back" intro="Sign in to your SENTINEL account."><AuthConfigurationNotice message={configurationError}/><AuthConfigurationNotice message={profileError}/><form className="sentinel-auth-form" onSubmit={submit} noValidate><label>Email address<span className="auth-input"><Mail size={17}/><input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} autoComplete="username" placeholder="you@example.com"/></span></label><label>Password<span className="auth-input"><LockKeyhole size={17}/><input type={show?'text':'password'} value={password} onChange={(e)=>setPassword(e.target.value)} autoComplete="current-password" placeholder="Enter your password"/><button type="button" className="auth-eye" onClick={()=>setShow(!show)} aria-label={show?'Hide password':'Show password'}>{show?<EyeOff size={17}/>:<Eye size={17}/>}</button></span></label><div className="auth-options"><label className="remember-option"><input type="checkbox" checked={remember} onChange={(e)=>setRemember(e.target.checked)}/> Remember me</label><button type="button" className="auth-forgot" onClick={()=>void recover()} disabled={recoveryBusy}>{recoveryBusy ? 'Sending…' : 'Forgot password?'}</button></div>{notice&&<p role="status" className="auth-recovery-note">{notice}</p>}{error&&<p role="alert" className="auth-error">{error}</p>}<button className="auth-submit" type="submit" disabled={busy || Boolean(configurationError)}>{busy?'Signing in…':'Sign in'} <ArrowRight size={16}/></button></form><p className="auth-switch">Don&apos;t have an account? <Link to="/signup">Create an account</Link></p></AuthFrame>
+  return <AuthFrame heading="Welcome back" intro="Sign in to your SENTINEL account."><AuthConfigurationNotice message={configurationError}/><AuthConfigurationNotice message={profileError}/><form className="sentinel-auth-form" onSubmit={submit} noValidate><label>Email address<span className="auth-input"><Mail size={17}/><input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} autoComplete="username" placeholder="you@example.com"/></span></label><label>Password<span className="auth-input"><LockKeyhole size={17}/><input type={show?'text':'password'} value={password} onChange={(e)=>setPassword(e.target.value)} autoComplete="current-password" placeholder="Enter your password"/><button type="button" className="auth-eye" onClick={()=>setShow(!show)} aria-label={show?'Hide password':'Show password'}>{show?<EyeOff size={17}/>:<Eye size={17}/>}</button></span></label><div className="auth-options"><label className="remember-option"><input type="checkbox" checked={remember} onChange={(e)=>setRemember(e.target.checked)}/> Remember me</label><button type="button" className="auth-forgot" onClick={()=>void recover()} disabled={recoveryBusy}>{recoveryBusy ? 'Sending…' : 'Forgot password?'}</button></div>{notice&&<p role="status" className="auth-recovery-note">{notice}</p>}{error&&<p role="alert" className="auth-error">{error}</p>}<button className="auth-submit" type="submit" disabled={busy || Boolean(configurationError)}>{busy?'Signing in…':'Sign in'} <ArrowRight size={16}/></button></form><p className="auth-switch">Don&apos;t have an account? <Link to="/signup">Create an account</Link></p><p className="auth-switch"><Link to="/presentation">Open presentation access</Link></p></AuthFrame>
+}
+
+export function SentinelPresentationPage() {
+  const { user, loading, signInForPresentation } = useSentinelAuth()
+  const navigate = useNavigate()
+  const [accessKey, setAccessKey] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (loading) return <LoadingState />
+  if (user) return <Navigate to={DASHBOARD} replace />
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    setBusy(true)
+    const result = await signInForPresentation(accessKey)
+    setBusy(false)
+    if (result.error) { setError(result.error); return }
+    setAccessKey('')
+    navigate(DASHBOARD, { replace: true })
+  }
+  return <AuthFrame heading="Presentation access" intro="Enter the private access key provided by the presenter. This temporary session is isolated from Supabase accounts."><form className="sentinel-auth-form" onSubmit={submit} noValidate><label>Presentation access key<span className="auth-input"><LockKeyhole size={17}/><input type="password" value={accessKey} onChange={(event)=>setAccessKey(event.target.value)} autoComplete="off" required/></span></label>{error && <p role="alert" className="auth-error">{error}</p>}<button className="auth-submit" type="submit" disabled={busy || !accessKey}>{busy ? 'Checking access…' : 'Continue to dashboard'} <ArrowRight size={16}/></button></form><p className="auth-switch"><Link to="/login">Return to Supabase sign in</Link></p></AuthFrame>
 }
 
 export function SentinelSignupPage() {

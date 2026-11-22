@@ -1,3 +1,5 @@
+import { hasValidPresentationSession } from '../server/demoAccess'
+
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
 const MAX_TEXT_LENGTH = 5000
 const MAX_BODY_BYTES = 30_000
@@ -84,14 +86,17 @@ async function handle(request: Request): Promise<Response> {
   if (request.method !== 'POST') return json(405, 'method_not_allowed', 'Use POST to analyze a post.')
   const authorization = request.headers.get('authorization') ?? ''
   const tokenMatch = authorization.match(/^Bearer\s+([^\s]+)$/i)
-  if (!tokenMatch) return json(401, 'unauthorized', 'Sign in before analyzing a post.')
+  const hasPresentationAccess = hasValidPresentationSession(request)
+  if (!tokenMatch && !hasPresentationAccess) return json(401, 'unauthorized', 'Sign in before analyzing a post.')
 
   const supabaseUrl = process.env.VITE_SUPABASE_URL?.trim()
   const publicKey = process.env.VITE_SUPABASE_ANON_KEY?.trim() || process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
-  if (!supabaseUrl || !publicKey) return json(503, 'auth_service_not_configured', 'The authentication service is not configured on the server.')
-  const authStatus = await verifyAccessToken(tokenMatch[1], supabaseUrl, publicKey)
-  if (authStatus === 'invalid') return json(401, 'unauthorized', 'Your session is invalid or expired. Sign in again.')
-  if (authStatus === 'unavailable') return json(503, 'auth_service_unavailable', 'Could not verify your session. Please try again.')
+  if (tokenMatch) {
+    if (!supabaseUrl || !publicKey) return json(503, 'auth_service_not_configured', 'The authentication service is not configured on the server.')
+    const authStatus = await verifyAccessToken(tokenMatch[1], supabaseUrl, publicKey)
+    if (authStatus === 'invalid') return json(401, 'unauthorized', 'Your session is invalid or expired. Sign in again.')
+    if (authStatus === 'unavailable') return json(503, 'auth_service_unavailable', 'Could not verify your session. Please try again.')
+  }
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim()
   if (!geminiKey) return json(503, 'analysis_not_configured', 'Gemini analysis is not configured on the server yet.')

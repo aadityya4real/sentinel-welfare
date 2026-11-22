@@ -6,16 +6,21 @@ export type AnalyzePostResponse = {
   model: { provider: string; name: string; version: string }
 }
 
-export async function analyzePost(text: string, platform: string): Promise<AnalyzePostResponse> {
-  if (!supabase) throw new Error('SENTINEL is not connected to Supabase. Sign in again after configuration is complete.')
-  const { data, error } = await supabase.auth.getSession()
-  if (error || !data.session?.access_token) throw new Error('Your session has expired. Sign in again before analyzing a post.')
+export async function analyzePost(text: string, platform: string, presentationAccess = false): Promise<AnalyzePostResponse> {
+  let accessToken: string | undefined
+  if (!presentationAccess) {
+    if (!supabase) throw new Error('SENTINEL is not connected to Supabase. Sign in again after configuration is complete.')
+    const { data, error } = await supabase.auth.getSession()
+    if (error || !data.session?.access_token) throw new Error('Your session has expired. Sign in again before analyzing a post.')
+    accessToken = data.session.access_token
+  }
 
   let response: Response
   try {
     response = await fetch('/api/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session.access_token}` },
+      headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
+      credentials: 'same-origin',
       body: JSON.stringify({ text, platform }),
     })
   } catch {

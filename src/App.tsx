@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { SentinelLoginPage, SentinelProtected, SentinelSignupPage } from './sentinel/SentinelAuth'
+import { SentinelLoginPage, SentinelPresentationPage, SentinelProtected, SentinelSignupPage } from './sentinel/SentinelAuth'
 import { AccountSettingsPage, AnalyzePostPage, AnalysisInsightsPage, BehavioralTrendsPage, CommunitySupportPage, DashboardPage, PrivacyDataPage, SentinelAppShell, SupportCenterPage } from './sentinel/MentalHealthPages'
 import { LandingPage } from './sentinel/SentinelPages'
 
@@ -7,6 +7,7 @@ export function App() {
   return <Routes>
     <Route path="/" element={<LandingPage />} />
     <Route path="/login" element={<SentinelLoginPage />} />
+    <Route path="/presentation" element={<SentinelPresentationPage />} />
     <Route path="/signup" element={<SentinelSignupPage />} />
     <Route path="/dashboard" element={<SentinelProtected><SentinelAppShell /></SentinelProtected>}>
       <Route index element={<DashboardPage />} />
