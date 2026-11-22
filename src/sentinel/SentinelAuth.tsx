@@ -16,7 +16,7 @@ type AuthApi = {
   profileError: string | null
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>
   signIn: (email: string, password: string, remember: boolean) => Promise<AuthResult>
-  signInForDemo: (accessKey: string) => Promise<AuthResult>
+  signInForDemo: () => Promise<AuthResult>
   signOut: () => Promise<AuthResult>
   logout: () => Promise<AuthResult>
   requestPasswordReset: (email: string) => Promise<AuthResult>
@@ -124,7 +124,7 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
       if (active && window.sessionStorage.getItem(DEMO_SESSION_MARKER)) {
         window.sessionStorage.removeItem(DEMO_SESSION_MARKER)
         setDemoSessionExpired(true)
-        setDemoAccessMessage('Your demo session expired. Enter the demo access key to continue.')
+        setDemoAccessMessage('Your demo session expired. Select Enter Demo to continue.')
       }
       return false
     }
@@ -185,17 +185,14 @@ export function SentinelAuthProvider({ children }: { children: ReactNode }) {
     } catch { return { error: authFailure } }
   }, [configurationError, syncSession])
 
-  const signInForDemo = useCallback(async (accessKey: string): Promise<AuthResult> => {
+  const signInForDemo = useCallback(async (): Promise<AuthResult> => {
     try {
       const response = await fetch('/api/demo-session', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessKey }),
       })
       const result = await response.json().catch(() => ({})) as { authenticated?: boolean; error?: string }
       if (!response.ok || !result.authenticated) {
-        if (response.status === 401) return { error: 'That demo access key didn’t match. Check it and try again.' }
         if (response.status === 503) return { error: 'Demo Access is unavailable right now. Please try again later.' }
         if (response.status >= 500) return { error: 'Demo Access encountered a server error. Please try again in a moment.' }
         return { error: result.error ?? 'Demo Access could not be started. Please try again.' }
@@ -257,7 +254,7 @@ export function SentinelProtected({ children }: { children: ReactNode }) {
   const { user, loading, demoSessionExpired } = useSentinelAuth()
   const location = useLocation()
   if (loading) return <LoadingState />
-  if (!user) return <Navigate to={demoSessionExpired ? '/demo-access' : '/login'} state={demoSessionExpired ? { message: 'Your demo session expired. Enter the demo access key to continue.' } : { from: location.pathname }} replace />
+  if (!user) return <Navigate to={demoSessionExpired ? '/demo-access' : '/login'} state={demoSessionExpired ? { message: 'Your demo session expired. Select Enter Demo to continue.' } : { from: location.pathname }} replace />
   return <>{children}</>
 }
 
@@ -307,24 +304,21 @@ export function SentinelDemoAccessPage() {
   const { user, loading, demoSessionExpired, demoAccessMessage, signInForDemo } = useSentinelAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [accessKey, setAccessKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const state = location.state as { message?: string } | null
-  const notice = state?.message ?? (demoSessionExpired ? 'Your demo session expired. Enter the demo access key to continue.' : demoAccessMessage ?? '')
+  const notice = state?.message ?? (demoSessionExpired ? 'Your demo session expired. Select Enter Demo to continue.' : demoAccessMessage ?? '')
   if (loading) return <LoadingState />
   if (user) return <Navigate to={DASHBOARD} replace />
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
+  const enterDemo = async () => {
     setError('')
     setBusy(true)
-    const result = await signInForDemo(accessKey)
+    const result = await signInForDemo()
     setBusy(false)
     if (result.error) { setError(result.error); return }
-    setAccessKey('')
     navigate(DASHBOARD, { replace: true })
   }
-  return <AuthFrame heading="Welcome to SENTINEL Demo" intro="Explore the platform in a demonstration environment created for teachers, judges, and evaluators."><div className="demo-access-kicker"><span className="demo-access-icon"><ShieldCheck size={17}/></span><span><b>Evaluator workspace</b><small>No personal account required</small></span></div>{notice && <p className="demo-session-notice" role="status">{notice}</p>}<form className="sentinel-auth-form demo-access-form" onSubmit={submit} noValidate autoComplete="off"><label htmlFor="demo-access-key">Demo access key<span className="auth-input"><LockKeyhole size={17}/><input id="demo-access-key" type="password" value={accessKey} onChange={(event)=>{setAccessKey(event.target.value);setError('')}} autoComplete="off" autoCapitalize="none" spellCheck={false} aria-describedby={error ? 'demo-access-error' : undefined} required/></span></label>{error && <p id="demo-access-error" role="alert" className="auth-error">{error}</p>}<button className="auth-submit" type="submit" disabled={busy || !accessKey.trim()}>{busy ? 'Verifying access…' : 'Enter Demo'} <ArrowRight size={16}/></button></form><div className="demo-privacy-note"><ShieldCheck size={16}/><p>Demo Access is separate from personal accounts. Your demo activity stays in this browser and does not change Supabase user records.</p></div><p className="auth-switch">Already have an account? <Link to="/login">Sign in to SENTINEL</Link></p></AuthFrame>
+  return <AuthFrame heading="Welcome to SENTINEL Demo" intro="Explore the platform in a demonstration environment created for teachers, judges, and evaluators."><div className="demo-access-kicker"><span className="demo-access-icon"><ShieldCheck size={17}/></span><span><b>Evaluator workspace</b><small>Ready to explore SENTINEL</small></span></div>{notice && <p className="demo-session-notice" role="status">{notice}</p>}{error && <p role="alert" className="auth-error">{error}</p>}<button className="auth-submit demo-enter-button" type="button" onClick={() => void enterDemo()} disabled={busy}>{busy ? 'Opening your workspace…' : 'Enter Demo'} <ArrowRight size={16}/></button><div className="demo-privacy-note"><ShieldCheck size={16}/><p>Demo Access is separate from personal accounts. Your demo activity stays in this browser and does not change Supabase user records.</p></div><p className="auth-switch">Already have an account? <Link to="/login">Sign in to SENTINEL</Link></p></AuthFrame>
 }
 
 export function SentinelSignupPage() {
